@@ -1,9 +1,92 @@
 from .Config import Config
 
+import subprocess
 from moviepy.editor import *
 from moviepy.editor import VideoFileClip, AudioFileClip
 from pytube import YouTube
 import time, os
+import math
+
+
+# def split_video_into_clips(video_path, output_dir, clip_length=62, text_overlay="Part {part}"):
+#     """Splits a video into 62-second clips and overlays text using FFmpeg."""
+#     os.makedirs(output_dir, exist_ok=True)
+
+#     video = VideoFileClip(video_path)
+#     duration = math.floor(video.duration)  # Ensure we don't exceed the duration
+#     num_clips = math.ceil(duration / clip_length)
+
+#     clip_data = []  # Store file paths and part numbers
+#     for i in range(num_clips):
+#         start_time = i * clip_length
+#         end_time = min(start_time + clip_length, duration)  # Ensure last clip is within duration
+
+#         part_number = i + 1
+#         output_clip_path = os.path.join(output_dir, f"part_{part_number}.mp4")
+
+#         overlay_text = text_overlay.format(part=part_number)
+
+#         print(f"Creating clip {part_number}: {start_time}s to {end_time}s (with text overlay)")
+
+#         # ✅ FFmpeg command to overlay text
+#         ffmpeg_command = [
+#             "ffmpeg", "-hide_banner", "-loglevel", "error",
+#             "-i", video_path,  # Input video
+#             "-vf", f"drawtext=text='{overlay_text}':fontcolor=white:fontsize=50:x=50:y=50",  # Text overlay
+#             "-ss", str(start_time), "-to", str(end_time),
+#             "-c:a", "copy", "-c:v", "libx264", "-preset", "fast",  # Re-encode to apply text
+#             output_clip_path
+#         ]
+
+#         try:
+#             subprocess.run(ffmpeg_command, check=True)
+#             clip_data.append({"path": output_clip_path, "part": part_number})
+#         except subprocess.CalledProcessError as e:
+#             print(f"Error splitting clip {part_number}: {e}")
+
+#     video.close()
+#     return clip_data  # Return list of clips with part numbers
+
+
+
+def split_video_into_clips(video_path, output_dir, clip_length=62):
+    """Splits a video into 62-second clips using FFmpeg (without text overlay)."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    video = VideoFileClip(video_path)
+    duration = math.floor(video.duration)  # Round down to avoid exceeding length
+    num_clips = max(1, math.ceil(duration / clip_length))  # Ensure at least 1 clip
+
+    clip_data = []  # Store file paths and part numbers
+    for i in range(num_clips):
+        start_time = i * clip_length
+        end_time = min(start_time + clip_length, duration)  # Ensure we don’t exceed duration
+
+        part_number = i + 1
+        output_clip_path = os.path.join(output_dir, f"part_{part_number}.mp4")
+
+        print(f"Creating clip {part_number}: {start_time}s to {end_time}s (without text overlay)")
+
+        # ✅ FFmpeg command (without text overlay)
+        ffmpeg_command = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", video_path,  # Input video
+            "-ss", str(start_time), "-to", str(end_time),
+            "-c", "copy",  # ✅ No re-encoding (fastest)
+            output_clip_path
+        ]
+
+        try:
+            subprocess.run(ffmpeg_command, check=True)
+            clip_data.append({"path": output_clip_path, "part": part_number})
+        except subprocess.CalledProcessError as e:
+            print(f"Error splitting clip {part_number}: {e}")
+
+    video.close()
+    return clip_data  # Return list of clips with part numbers
+
+
+
 
 class Video:
     def __init__(self, source_ref, video_text):
@@ -57,18 +140,39 @@ class Video:
             exit(f"File: {self.source_ref} has wrong file extension. Must be .mp4 or .webm.")
 
     def get_youtube_video(self, max_res=True):
+        """Download a YouTube video using yt-dlp with more robust format selection."""
         url = self.source_ref
-        streams = YouTube(url).streams.filter(progressive=True)
-        valid_streams = sorted(streams, reverse=True, key=lambda x: x.resolution is not None)
-        filtered_streams = sorted(valid_streams, reverse=True, key=lambda x: int(x.resolution.split("p")[0]))
-        if filtered_streams:
-            selected_stream = filtered_streams[0]
-            print("Starting Download for Video...")
-            selected_stream.download(output_path=os.path.join(os.getcwd(), Config.get().videos_dir), filename="pre-processed.mp4")
-            filename = os.path.join(os.getcwd(), Config.get().videos_dir, "pre-processed"+".mp4")
-            return filename
+        output_dir = os.path.join(os.getcwd(), Config.get().videos_dir)
+        output_path = os.path.join(output_dir, "pre-processed.mp4")
 
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
 
+        # Updated yt-dlp command with better format selection
+        command = [
+            "yt-dlp", 
+            "-f", "bestaudio*+bestvideo*[height<=1080]/best",  # Selects best video+audio if separate, else best
+            "--merge-output-format", "mp4",  # Ensures output is MP4
+            "-o", output_path,  # Output filename
+            url
+        ]
+
+        print("Starting Download for Video...")
+
+        try:
+            subprocess.run(command, check=True)
+            if os.path.isfile(output_path):  # Ensure file exists after download
+                return output_path
+            else:
+                print("Error: Video file was not created.")
+                return None
+        except subprocess.CalledProcessError as e:
+            print(f"Error downloading video: {e}")
+            return None
+
+    
+
+  
         video = YouTube(url).streams.filter(file_extension="mp4", adaptive=True).first()
         audio = YouTube(url).streams.filter(file_extension="webm", only_audio=True, adaptive=True).first()
         if video and audio:
@@ -113,3 +217,7 @@ class Video:
                 video_dir = self.get_youtube_video()
                 return video_dir
             return self.source_ref
+        
+
+
+
